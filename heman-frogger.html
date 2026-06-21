@@ -69,13 +69,14 @@
     <span>Form <b id="form">ADAM</b></span>
     <span>Power</span>
     <div id="powerWrap"><div id="powerBar"></div></div>
+    <button id="soundBtn" aria-label="Toggle sound" style="background:#2a2658;color:#fff;border:1px solid #463f8f;border-radius:8px;padding:4px 9px;cursor:pointer;font-size:14px;box-shadow:none">🔊</button>
   </div>
 
   <div class="wrap">
     <canvas id="game" width="560" height="640"></canvas>
     <div id="overlay">
       <h2 id="ovTitle">PRINCE ADAM'S QUEST</h2>
-      <p id="ovText">Guide timid Prince Adam across the roads and rivers of Eternia to reach Castle Grayskull. Grab the glowing <b style="color:#ffcc33">Sword of Power</b> and raise it aloft to transform into <b style="color:#ff5fa2">HE-MAN</b> — invincible, and able to smash anything in his path!</p>
+      <p id="ovText">Guide timid Prince Adam across the roads and rivers of Eternia to reach Castle Grayskull. Grab the glowing <b style="color:#ffcc33">Sword of Power</b> and raise it aloft to transform into <b style="color:#ff5fa2">HE-MAN</b> — invincible, and able to smash anything in his path! Beware <b style="color:#9b6bff">Skeletor</b>, who guards the gate to Grayskull — slip past him as Adam while he patrols away, or blast through as He-Man!</p>
       <button id="startBtn">START QUEST</button>
       <div class="keys">Move with <kbd>↑</kbd><kbd>↓</kbd><kbd>←</kbd><kbd>→</kbd> or <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd></div>
     </div>
@@ -99,10 +100,62 @@ const ui = { level:el('level'), score:el('score'), lives:el('lives'),
              form:el('form'), power:el('powerBar') };
 const overlay = el('overlay'), ovTitle = el('ovTitle'), ovText = el('ovText');
 
+// ---------- Audio (Web Audio API — no external files) ----------
+let actx=null, soundOn=true, musicTimer=null, musicStep=0;
+const MELODY=[440,0,523,587, 659,587,523,440, 392,440,523,0, 587,523,440,0];
+const BASS  =[110,0,110,0, 165,0,110,0, 98,0,98,0, 110,0,123,0];
+function initAudio(){ if(actx) return; try{ const C=window.AudioContext||window.webkitAudioContext; actx=new C(); }catch(e){ actx=null; } }
+function resumeAudio(){ if(actx && actx.state==='suspended') actx.resume(); }
+function note(freq,start,dur,type,vol){
+  if(!actx||!soundOn) return;
+  const t=actx.currentTime+start;
+  const o=actx.createOscillator(), g=actx.createGain();
+  o.type=type||'square'; o.frequency.setValueAtTime(freq,t);
+  g.gain.setValueAtTime(0.0001,t);
+  g.gain.exponentialRampToValueAtTime(vol||0.15,t+0.02);
+  g.gain.exponentialRampToValueAtTime(0.0001,t+dur);
+  o.connect(g).connect(actx.destination); o.start(t); o.stop(t+dur+0.03);
+}
+function noiseBurst(dur,vol){
+  if(!actx||!soundOn) return;
+  const n=Math.floor(actx.sampleRate*dur), buf=actx.createBuffer(1,n,actx.sampleRate), d=buf.getChannelData(0);
+  for(let i=0;i<n;i++) d[i]=(Math.random()*2-1)*(1-i/n);
+  const s=actx.createBufferSource(); s.buffer=buf;
+  const g=actx.createGain(); g.gain.value=vol||0.3;
+  s.connect(g).connect(actx.destination); s.start();
+}
+function sfx(name){
+  initAudio(); resumeAudio(); if(!actx||!soundOn) return;
+  if(name==='hop') note(440,0,0.07,'square',0.10);
+  else if(name==='transform'){ [392,523,659,784,1047].forEach((f,i)=>note(f,i*0.07,0.28,'sawtooth',0.16)); }
+  else if(name==='smash'){ noiseBurst(0.18,0.3); note(110,0,0.18,'square',0.18); }
+  else if(name==='die'){ [392,294,220,165].forEach((f,i)=>note(f,i*0.1,0.22,'square',0.16)); }
+  else if(name==='win'){ [523,659,784,1047,880,1047].forEach((f,i)=>note(f,i*0.11,0.26,'square',0.16)); }
+  else if(name==='zap'){ note(1300,0,0.05,'sawtooth',0.18); note(950,0.05,0.1,'sawtooth',0.18); noiseBurst(0.12,0.18); }
+  else if(name==='powerdown'){ [660,440].forEach((f,i)=>note(f,i*0.08,0.16,'triangle',0.10)); }
+}
+function startMusic(){
+  initAudio(); resumeAudio(); if(!actx||musicTimer) return;
+  const spb=60/132/2; // eighth-note seconds @132bpm
+  musicStep=0;
+  musicTimer=setInterval(()=>{
+    if(!actx||!soundOn) return;
+    const m=MELODY[musicStep%MELODY.length], b=BASS[musicStep%BASS.length];
+    if(m) note(m,0,spb*0.9,'square',0.05);
+    if(b) note(b,0,spb*0.95,'triangle',0.08);
+    musicStep++;
+  }, spb*1000);
+}
+function toggleSound(){
+  soundOn=!soundOn;
+  el('soundBtn').textContent = soundOn?'🔊':'🔇';
+  if(soundOn){ initAudio(); resumeAudio(); startMusic(); }
+}
+
 // ---- Game state ----
 let state = 'menu';   // menu | play | dead | over | win
 let level = 1, score = 0, lives = 3, best = 0;
-let player, lanes = [], swords = [], particles = [];
+let player, lanes = [], swords = [], particles = [], skeletor = null;
 let powerTimer = 0;   // seconds of He-Man form remaining
 const POWER_MAX = 6;
 
@@ -147,6 +200,10 @@ function buildLevel(){
 
   // Place one Sword of Power on a random road or median spot per level
   spawnSword();
+
+  // Skeletor guards the gate to Castle Grayskull
+  skeletor = { x: W*0.5, dir: (level%2?1:-1), speed: 55 + level*15,
+               minX: T*1.6, maxX: W - T*1.6, t:0, defeated:false, zap:0 };
 
   // reset player at start
   player = { col: (COLS/2|0), row: START_ROW, x:0, y:0,
@@ -213,6 +270,7 @@ function move(dir){
   player.hopFrom = {x:player.x, y:player.y};
   player.col = nc; player.row = nr; player.onLog = null;
   player.hop = 1;  // 1 -> 0 progress
+  sfx('hop');
   if(dir==='up') score += 1, ui.score.textContent = score;
 }
 
@@ -229,7 +287,7 @@ function update(dt){
   // power timer
   if(powerTimer>0){
     powerTimer -= dt;
-    if(powerTimer<=0){ powerTimer=0; setForm('ADAM'); }
+    if(powerTimer<=0){ powerTimer=0; setForm('ADAM'); sfx('powerdown'); }
     ui.power.style.width = (powerTimer/POWER_MAX*100)+'%';
   }
 
@@ -276,9 +334,28 @@ function update(dt){
   const row = player.row;
   const pcx = player.x + T/2;
 
-  // GOAL
-  if(row===GOAL_ROW){
-    winLevel(); return;
+  // Skeletor patrols the gate
+  if(skeletor && !skeletor.defeated){
+    skeletor.t += dt;
+    skeletor.x += skeletor.dir*skeletor.speed*dt;
+    if(skeletor.x<skeletor.minX){ skeletor.x=skeletor.minX; skeletor.dir=1; }
+    if(skeletor.x>skeletor.maxX){ skeletor.x=skeletor.maxX; skeletor.dir=-1; }
+  }
+  if(skeletor && skeletor.zap>0) skeletor.zap-=dt;
+
+  // GOAL — Skeletor guards the gate to Grayskull
+  if(row===GOAL_ROW && settled){
+    const guarding = skeletor && !skeletor.defeated;
+    const near = guarding && Math.abs((player.x+T/2) - skeletor.x) < T*1.15;
+    if(powerTimer>0){
+      if(near) defeatSkeletor();   // He-Man blasts through
+      winLevel(); return;
+    } else if(!near){
+      winLevel(); return;          // Adam sneaks past while Skeletor is elsewhere
+    } else {
+      skeletor.zap = 0.45; sfx('zap');
+      kill('Skeletor blasted Prince Adam at the gate!'); return;
+    }
   }
 
   // RIVER logic — must be on a log/raft or you drown (unless He-Man can walk water? keep classic: drown)
@@ -340,7 +417,7 @@ function smash(it,lane){
   // respawn the vehicle far away
   it.x += (lane.speed>0?-1:1) * (COLS+lane.len)*T;
   score += 25; ui.score.textContent = score;
-  shake = 8;
+  shake = 8; sfx('smash');
 }
 
 // ---------- Transform ----------
@@ -357,6 +434,7 @@ function transform(){
   }
   flash = 1;
   shake = 12;
+  sfx('transform');
 }
 function setForm(f){
   ui.form.textContent = f;
@@ -374,7 +452,7 @@ function kill(msg){
     particles.push({x:player.x+T/2,y:player.y+T/2,
       vx:Math.cos(a)*sp,vy:Math.sin(a)*sp,life:0.7,col:'#ff5fa2',sz:3+Math.random()*4});
   }
-  shake = 10;
+  shake = 10; sfx('die');
   if(lives<=0){
     state='over';
     showOverlay('GAME OVER', msg+'<br><br>Final score: <b style="color:#ffcc33">'+score+'</b>'+
@@ -395,10 +473,24 @@ function winLevel(){
     particles.push({x:player.x+T/2,y:player.y+T/2,
       vx:Math.cos(a)*sp,vy:Math.sin(a)*sp,life:1,col:Math.random()<0.5?'#ffcc33':'#3ddc6b',sz:3+Math.random()*5});
   }
+  sfx('win');
   level++; ui.level.textContent = level;
   state='win';
   showOverlay('GRAYSKULL REACHED!',
     'Adam raises the Sword high atop Castle Grayskull!<br><br>Level '+(level-1)+' cleared. The roads of Eternia grow more dangerous...','ENTER LEVEL '+level);
+}
+
+function defeatSkeletor(){
+  if(!skeletor || skeletor.defeated) return;
+  skeletor.defeated = true;
+  score += 75; ui.score.textContent = score;
+  for(let i=0;i<32;i++){
+    const a=Math.random()*Math.PI*2, sp=80+Math.random()*240;
+    particles.push({x:skeletor.x, y:tileY(GOAL_ROW)+T*0.7,
+      vx:Math.cos(a)*sp, vy:Math.sin(a)*sp, life:0.85,
+      col:Math.random()<0.5?'#9b6bff':'#caffca', sz:3+Math.random()*5});
+  }
+  shake = 12; sfx('smash');
 }
 
 // ---------- Overlay control ----------
@@ -411,6 +503,7 @@ function showOverlay(title, html, btn){
 function hideOverlay(){ overlay.classList.add('hidden'); }
 
 el('startBtn').addEventListener('click', handleStart);
+el('soundBtn').addEventListener('click', toggleSound);
 function handleStart(){
   if(state==='menu'){ level=1;score=0;lives=3; resetHud(); buildLevel(); }
   else if(state==='dead'){ // respawn same level
@@ -420,6 +513,7 @@ function handleStart(){
   }
   else if(state==='over'){ level=1;score=0;lives=3; resetHud(); buildLevel(); }
   else if(state==='win'){ powerTimer=0;setForm('ADAM');ui.power.style.width='0%'; buildLevel(); }
+  initAudio(); resumeAudio(); startMusic();
   hideOverlay();
   state='play';
 }
@@ -441,6 +535,7 @@ function render(){
   if(state!=='menu'){
     drawSwords();
     drawLanes();
+    drawSkeletor();
     drawPlayer();
   }
   drawParticles();
@@ -584,6 +679,46 @@ function drawSwords(){
     ctx.strokeStyle='rgba(255,230,128,.5)'; ctx.lineWidth=1;
     ctx.beginPath(); ctx.arc(x,y,glow+6,0,7); ctx.stroke();
   }
+}
+
+// ---------- Skeletor ----------
+function drawSkeletor(){
+  if(!skeletor || skeletor.defeated) return;
+  const baseY = tileY(GOAL_ROW)+T-2;
+  const bob = Math.sin(skeletor.t*4)*2;
+  const x = skeletor.x, y = baseY+bob;
+  ctx.save();
+  ctx.translate(x,y);
+  // shadow
+  ctx.fillStyle='rgba(0,0,0,.3)'; ctx.beginPath(); ctx.ellipse(0,2,10,3,0,0,7); ctx.fill();
+  // purple hooded robe
+  ctx.fillStyle='#5b2a8c';
+  ctx.beginPath(); ctx.moveTo(-9,0); ctx.lineTo(-7,-21);
+  ctx.quadraticCurveTo(0,-31,7,-21); ctx.lineTo(9,0); ctx.closePath(); ctx.fill();
+  ctx.fillStyle='#7a3fb0'; ctx.fillRect(-9,-3,18,3); // robe hem highlight
+  // hood opening
+  ctx.fillStyle='#3a1a5c'; ctx.beginPath(); ctx.ellipse(0,-21,6,7,0,0,7); ctx.fill();
+  // blue skull face
+  ctx.fillStyle='#bfe3ff'; ctx.beginPath(); ctx.ellipse(0,-20,4.6,5.6,0,0,7); ctx.fill();
+  // eye sockets
+  ctx.fillStyle='#10210f'; ctx.beginPath(); ctx.arc(-2,-21,1.5,0,7); ctx.arc(2,-21,1.5,0,7); ctx.fill();
+  // glowing eyes (red when zapping)
+  ctx.fillStyle = skeletor.zap>0 ? '#ff3b3b' : 'rgba(120,235,120,.95)';
+  ctx.beginPath(); ctx.arc(-2,-21,0.9,0,7); ctx.arc(2,-21,0.9,0,7); ctx.fill();
+  // teeth
+  ctx.strokeStyle='#10210f'; ctx.lineWidth=0.7;
+  ctx.beginPath(); ctx.moveTo(-2.5,-15.5); ctx.lineTo(2.5,-15.5); ctx.stroke();
+  // Havoc Staff (ram-skull orb)
+  ctx.strokeStyle='#caa46a'; ctx.lineWidth=2;
+  ctx.beginPath(); ctx.moveTo(9,-1); ctx.lineTo(11,-27); ctx.stroke();
+  ctx.fillStyle='#e0457b'; ctx.beginPath(); ctx.arc(11,-29,3,0,7); ctx.fill();
+  // zap beam toward Adam
+  if(skeletor.zap>0 && player){
+    ctx.strokeStyle='rgba(255,70,70,.85)'; ctx.lineWidth=2;
+    ctx.beginPath(); ctx.moveTo(0,-20);
+    ctx.lineTo((player.x+T/2)-x, (player.y+T*0.45)-baseY); ctx.stroke();
+  }
+  ctx.restore();
 }
 
 // ---------- Character art ----------
