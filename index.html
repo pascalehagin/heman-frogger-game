@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
 <title>By the Power of Grayskull — Frogger</title>
 <style>
   :root{
@@ -24,22 +24,25 @@
   }
   h1 small{display:block; font-size:12px; color:var(--pink); letter-spacing:3px}
   #hud{
-    display:flex; gap:18px; align-items:center; font-size:14px;
+    display:flex; gap:10px 16px; align-items:center; font-size:14px;
+    flex-wrap:wrap; justify-content:center; max-width:100%;
     background:var(--panel); padding:8px 16px; border-radius:10px;
     border:1px solid #2e2a66;
   }
   #hud b{color:var(--gold)}
   #powerWrap{width:140px;height:12px;background:#2a2658;border-radius:6px;overflow:hidden;border:1px solid #463f8f}
   #powerBar{height:100%;width:0;background:linear-gradient(90deg,#ffcc33,#ff5fa2);transition:width .1s}
-  .wrap{position:relative}
+  .wrap{position:relative; width:100%; max-width:560px}
   canvas{
     background:#10331a; border-radius:14px; border:3px solid #2e2a66;
     box-shadow:0 12px 40px rgba(0,0,0,.5); display:block; touch-action:none;
+    width:100%; height:auto;
   }
   #overlay{
     position:absolute; inset:0; display:flex; flex-direction:column;
     align-items:center; justify-content:center; text-align:center; gap:14px;
     background:rgba(8,6,24,.82); border-radius:14px; padding:20px;
+    overflow:auto;
   }
   #overlay h2{margin:0;font-size:30px;color:var(--gold);text-shadow:0 0 14px rgba(255,204,51,.7)}
   #overlay p{margin:0;max-width:420px;line-height:1.5;color:#d7d2ff;font-size:14px}
@@ -54,9 +57,24 @@
   .keys{font-size:12px;color:#9a93d6}
   .keys kbd{background:#2a2658;border:1px solid #463f8f;border-radius:4px;padding:1px 6px;margin:0 1px}
   #touch{display:none;gap:8px;margin-top:4px}
-  #touch button{padding:14px 18px;font-size:18px;box-shadow:0 3px 0 #b96b00}
-  @media (hover:none){#touch{display:grid;grid-template-columns:repeat(3,52px);grid-template-rows:repeat(2,52px);justify-content:center;gap:6px}}
+  #touch button{padding:14px 18px;font-size:18px;box-shadow:0 3px 0 #b96b00;
+    touch-action:manipulation; user-select:none; -webkit-user-select:none; -webkit-tap-highlight-color:transparent}
+  @media (hover:none),(pointer:coarse){#touch{display:grid;grid-template-columns:repeat(3,60px);grid-template-rows:repeat(2,60px);justify-content:center;gap:8px}}
   #touch .sp{visibility:hidden}
+
+  /* phones / narrow screens */
+  @media (max-width:520px){
+    body{padding:8px; gap:8px}
+    h1{font-size:18px}
+    h1 small{font-size:10px; letter-spacing:2px}
+    #hud{gap:6px 12px; font-size:12px; padding:6px 10px}
+    #powerWrap{width:90px}
+    #overlay h2{font-size:22px}
+    #overlay p{font-size:12.5px; line-height:1.45}
+    #overlay{padding:14px; gap:10px}
+    button{padding:10px 20px; font-size:15px}
+    .keys{display:none}
+  }
 </style>
 </head>
 <body>
@@ -253,7 +271,9 @@ window.addEventListener('keydown',e=>{
   if(d){ move(d); e.preventDefault(); }
 });
 document.querySelectorAll('#touch button').forEach(b=>{
-  b.addEventListener('click',()=>{ if(state==='play') move(b.dataset.d); });
+  const act = e=>{ e.preventDefault(); initAudio(); resumeAudio();
+                   if(state==='play') move(b.dataset.d); };
+  b.addEventListener('pointerdown', act);
 });
 
 function move(dir){
