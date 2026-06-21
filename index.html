@@ -1,0 +1,715 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>By the Power of Grayskull — Frogger</title>
+<style>
+  :root{
+    --bg:#0b0a1e; --panel:#15123a; --gold:#ffcc33; --pink:#ff5fa2;
+    --steel:#9fb3c8; --green:#3ddc6b;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%}
+  body{
+    background:radial-gradient(circle at 50% 0%, #221a52 0%, #0b0a1e 70%);
+    color:#fff; font-family:"Trebuchet MS",system-ui,sans-serif;
+    display:flex; flex-direction:column; align-items:center; gap:12px;
+    min-height:100%; padding:16px;
+  }
+  h1{
+    margin:4px 0 0; font-size:22px; letter-spacing:1px;
+    color:var(--gold); text-shadow:0 0 10px rgba(255,204,51,.6);
+    text-align:center;
+  }
+  h1 small{display:block; font-size:12px; color:var(--pink); letter-spacing:3px}
+  #hud{
+    display:flex; gap:18px; align-items:center; font-size:14px;
+    background:var(--panel); padding:8px 16px; border-radius:10px;
+    border:1px solid #2e2a66;
+  }
+  #hud b{color:var(--gold)}
+  #powerWrap{width:140px;height:12px;background:#2a2658;border-radius:6px;overflow:hidden;border:1px solid #463f8f}
+  #powerBar{height:100%;width:0;background:linear-gradient(90deg,#ffcc33,#ff5fa2);transition:width .1s}
+  .wrap{position:relative}
+  canvas{
+    background:#10331a; border-radius:14px; border:3px solid #2e2a66;
+    box-shadow:0 12px 40px rgba(0,0,0,.5); display:block; touch-action:none;
+  }
+  #overlay{
+    position:absolute; inset:0; display:flex; flex-direction:column;
+    align-items:center; justify-content:center; text-align:center; gap:14px;
+    background:rgba(8,6,24,.82); border-radius:14px; padding:20px;
+  }
+  #overlay h2{margin:0;font-size:30px;color:var(--gold);text-shadow:0 0 14px rgba(255,204,51,.7)}
+  #overlay p{margin:0;max-width:420px;line-height:1.5;color:#d7d2ff;font-size:14px}
+  button{
+    background:linear-gradient(180deg,#ffd34d,#ff9d2f); color:#3a1d00;
+    border:none; padding:12px 26px; font-size:16px; font-weight:bold;
+    border-radius:10px; cursor:pointer; letter-spacing:1px;
+    box-shadow:0 4px 0 #b96b00;
+  }
+  button:active{transform:translateY(2px);box-shadow:0 2px 0 #b96b00}
+  .hidden{display:none!important}
+  .keys{font-size:12px;color:#9a93d6}
+  .keys kbd{background:#2a2658;border:1px solid #463f8f;border-radius:4px;padding:1px 6px;margin:0 1px}
+  #touch{display:none;gap:8px;margin-top:4px}
+  #touch button{padding:14px 18px;font-size:18px;box-shadow:0 3px 0 #b96b00}
+  @media (hover:none){#touch{display:grid;grid-template-columns:repeat(3,52px);grid-template-rows:repeat(2,52px);justify-content:center;gap:6px}}
+  #touch .sp{visibility:hidden}
+</style>
+</head>
+<body>
+  <h1>BY THE POWER OF GRAYSKULL<small>a He-Man Frogger</small></h1>
+
+  <div id="hud">
+    <span>Lvl <b id="level">1</b></span>
+    <span>Score <b id="score">0</b></span>
+    <span>Lives <b id="lives">3</b></span>
+    <span>Form <b id="form">ADAM</b></span>
+    <span>Power</span>
+    <div id="powerWrap"><div id="powerBar"></div></div>
+  </div>
+
+  <div class="wrap">
+    <canvas id="game" width="560" height="640"></canvas>
+    <div id="overlay">
+      <h2 id="ovTitle">PRINCE ADAM'S QUEST</h2>
+      <p id="ovText">Guide timid Prince Adam across the roads and rivers of Eternia to reach Castle Grayskull. Grab the glowing <b style="color:#ffcc33">Sword of Power</b> and raise it aloft to transform into <b style="color:#ff5fa2">HE-MAN</b> — invincible, and able to smash anything in his path!</p>
+      <button id="startBtn">START QUEST</button>
+      <div class="keys">Move with <kbd>↑</kbd><kbd>↓</kbd><kbd>←</kbd><kbd>→</kbd> or <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd></div>
+    </div>
+  </div>
+
+  <div id="touch">
+    <span class="sp"></span><button data-d="up">▲</button><span class="sp"></span>
+    <button data-d="left">◀</button><button data-d="down">▼</button><button data-d="right">▶</button>
+  </div>
+
+<script>
+const cv = document.getElementById('game');
+const ctx = cv.getContext('2d');
+const W = cv.width, H = cv.height;
+const COLS = 14, ROWS = 16;
+const T = W / COLS;            // tile size (40)
+
+// HUD
+const el = id => document.getElementById(id);
+const ui = { level:el('level'), score:el('score'), lives:el('lives'),
+             form:el('form'), power:el('powerBar') };
+const overlay = el('overlay'), ovTitle = el('ovTitle'), ovText = el('ovText');
+
+// ---- Game state ----
+let state = 'menu';   // menu | play | dead | over | win
+let level = 1, score = 0, lives = 3, best = 0;
+let player, lanes = [], swords = [], particles = [];
+let powerTimer = 0;   // seconds of He-Man form remaining
+const POWER_MAX = 6;
+
+// Row layout (row 0 = top). ROWS=16
+// 0: Castle Grayskull goal zone
+// 1-5: river (logs/rafts) — fall in water = death unless riding
+// 6: safe median
+// 7-12: roads (vehicles)
+// 13: safe start verge
+// 14-15: spare/start
+const GOAL_ROW = 0;
+const RIVER_ROWS = [1,2,3,4,5];
+const MEDIAN_ROW = 6;
+const ROAD_ROWS = [7,8,9,10,11,12];
+const START_ROW = 13;
+
+function rndColor(arr){return arr[(Math.random()*arr.length)|0];}
+
+// ---------- Lane setup ----------
+function buildLevel(){
+  lanes = [];
+  swords = [];
+  const baseSpeed = 50 + level*14;   // px/sec
+
+  // River rows: floating rafts / Eternia barges
+  RIVER_ROWS.forEach((row,i)=>{
+    const dir = (i%2===0)?1:-1;
+    const speed = (baseSpeed*0.6 + i*8) * dir;
+    const len = 2 + ((i%3===0)?2:1);          // tiles
+    const gap = 3 + (i%2);
+    lanes.push(makeLane(row,'log',speed,len,gap));
+  });
+
+  // Road rows: vehicles / war machines
+  ROAD_ROWS.forEach((row,i)=>{
+    const dir = (i%2===0)?-1:1;
+    const speed = (baseSpeed*0.7 + i*10 + level*4) * dir;
+    const len = (i%4===0)?2:1;
+    const gap = 3 + ((level>3 && i%2===0)?0:1);
+    lanes.push(makeLane(row,'car',speed,len,gap));
+  });
+
+  // Place one Sword of Power on a random road or median spot per level
+  spawnSword();
+
+  // reset player at start
+  player = { col: (COLS/2|0), row: START_ROW, x:0, y:0,
+             onLog:null, hop:0, hopFrom:{x:0,y:0}, face:1, dead:false };
+  syncPlayerPixels(true);
+}
+
+function makeLane(row,type,speed,len,gap){
+  const period = len + gap;            // tiles between vehicle starts
+  const count = Math.ceil(COLS/period) + 2;
+  const items = [];
+  for(let k=0;k<count;k++){
+    items.push({ x: k*period*T + (Math.random()*8), len });
+  }
+  return { row, type, speed, len, gap, items,
+           color: type==='car'
+             ? rndColor(['#d23b3b','#f0a31e','#7b4dff','#1fa6c8','#e0457b'])
+             : '#6b4a2b' };
+}
+
+function spawnSword(){
+  // choose a road or median tile
+  const candidates = [MEDIAN_ROW, ...ROAD_ROWS];
+  const row = candidates[(Math.random()*candidates.length)|0];
+  const col = 1 + ((Math.random()*(COLS-2))|0);
+  swords.push({row,col,t:0,taken:false});
+}
+
+// ---------- Coordinate helpers ----------
+function tileX(col){return col*T;}
+function tileY(row){return row*T;}
+
+function syncPlayerPixels(snap){
+  const tx = tileX(player.col), ty = tileY(player.row);
+  if(snap){ player.x = tx; player.y = ty; player.hop = 0; }
+}
+
+// ---------- Input ----------
+const keymap = {ArrowUp:'up',ArrowDown:'down',ArrowLeft:'left',ArrowRight:'right',
+                w:'up',s:'down',a:'left',d:'right',W:'up',S:'down',A:'left',D:'right'};
+window.addEventListener('keydown',e=>{
+  if(state==='menu'||state==='dead'||state==='over'||state==='win'){
+    if(e.key===' '||e.key==='Enter'){ handleStart(); e.preventDefault(); }
+    return;
+  }
+  const d = keymap[e.key];
+  if(d){ move(d); e.preventDefault(); }
+});
+document.querySelectorAll('#touch button').forEach(b=>{
+  b.addEventListener('click',()=>{ if(state==='play') move(b.dataset.d); });
+});
+
+function move(dir){
+  if(player.hop>0 || player.dead) return;
+  let nc = player.col, nr = player.row;
+  if(dir==='up')   nr--;
+  if(dir==='down') nr++;
+  if(dir==='left'){ nc--; player.face=-1; }
+  if(dir==='right'){ nc++; player.face=1; }
+  nc = Math.max(0,Math.min(COLS-1,nc));
+  nr = Math.max(0,Math.min(ROWS-1,nr));
+  if(nc===player.col && nr===player.row) return;
+  // start hop animation
+  player.hopFrom = {x:player.x, y:player.y};
+  player.col = nc; player.row = nr; player.onLog = null;
+  player.hop = 1;  // 1 -> 0 progress
+  if(dir==='up') score += 1, ui.score.textContent = score;
+}
+
+// ---------- Update ----------
+let last = 0;
+function loop(ts){
+  const dt = Math.min(0.05,(ts-last)/1000)||0; last = ts;
+  if(state==='play') update(dt);
+  render();
+  requestAnimationFrame(loop);
+}
+
+function update(dt){
+  // power timer
+  if(powerTimer>0){
+    powerTimer -= dt;
+    if(powerTimer<=0){ powerTimer=0; setForm('ADAM'); }
+    ui.power.style.width = (powerTimer/POWER_MAX*100)+'%';
+  }
+
+  // move lane items
+  for(const lane of lanes){
+    const period = (lane.len+lane.gap)*T;
+    for(const it of lane.items){
+      it.x += lane.speed*dt;
+      // wrap
+      const span = period*lane.items.length;
+      if(lane.speed>0 && it.x > W + lane.len*T) it.x -= span;
+      if(lane.speed<0 && it.x < -lane.len*T)    it.x += span;
+    }
+  }
+
+  // leaving the river? stop riding so we re-snap to the grid
+  if(!RIVER_ROWS.includes(player.row)) player.onLog = false;
+
+  // player hop animation
+  if(player.hop>0){
+    player.hop -= dt*7;
+    if(player.hop<0) player.hop=0;
+    const p = 1-player.hop; // 0..1
+    player.x = lerp(player.hopFrom.x, tileX(player.col), p);
+    player.y = lerp(player.hopFrom.y, tileY(player.row), p);
+  } else {
+    player.y = tileY(player.row);
+    // while riding a raft, let the river logic drift player.x — don't snap
+    if(!player.onLog) player.x = tileX(player.col);
+  }
+
+  // sword animation + pickup
+  for(const sw of swords){
+    sw.t += dt;
+    if(!sw.taken && sw.row===player.row && sw.col===player.col && player.hop<0.5){
+      sw.taken = true;
+      transform();
+    }
+  }
+  swords = swords.filter(s=>!s.taken);
+
+  // collisions only when settled enough
+  const settled = player.hop < 0.6;
+  const row = player.row;
+  const pcx = player.x + T/2;
+
+  // GOAL
+  if(row===GOAL_ROW){
+    winLevel(); return;
+  }
+
+  // RIVER logic — must be on a log/raft or you drown (unless He-Man can walk water? keep classic: drown)
+  if(RIVER_ROWS.includes(row) && settled){
+    const lane = laneAt(row);
+    let riding=null;
+    for(const it of lane.items){
+      if(pcx > it.x && pcx < it.x + it.len*T){ riding=it; break; }
+    }
+    if(riding){
+      // drift with the raft
+      player.onLog = true;
+      const drift = lane.speed*dt;
+      player.x += drift;
+      // re-derive col from x so future hops align
+      player.col = Math.round(player.x / T);
+      if(player.x < -T*0.5 || player.x > W-T*0.5){ kill('Swept off the edge of Eternia!'); return; }
+    } else {
+      player.onLog = false;
+      if(powerTimer>0){
+        // He-Man is heavy — still can't swim; but give a beat of grace
+        kill('Even He-Man can\'t swim in full armor!');
+      } else {
+        kill('Prince Adam fell in the water!');
+      }
+      return;
+    }
+  }
+
+  // ROAD logic
+  if(ROAD_ROWS.includes(row) && settled){
+    const lane = laneAt(row);
+    for(const it of lane.items){
+      const hit = pcx > it.x+6 && pcx < it.x + it.len*T-6;
+      if(hit){
+        if(powerTimer>0){
+          // HE-MAN smashes the vehicle!
+          smash(it,lane);
+        } else {
+          kill('Prince Adam was run over!');
+          return;
+        }
+      }
+    }
+  }
+}
+
+function laneAt(row){ return lanes.find(l=>l.row===row); }
+function clampCol(c){ return Math.max(0,Math.min(COLS-1,c)); }
+function lerp(a,b,t){ return a+(b-a)*t; }
+
+function smash(it,lane){
+  // launch the vehicle away in big chunks
+  for(let i=0;i<14;i++){
+    particles.push({x:it.x+lane.len*T/2, y:tileY(lane.row)+T/2,
+      vx:(Math.random()-0.5)*420, vy:(Math.random()-0.7)*420,
+      life:0.7, col:lane.color, sz:4+Math.random()*5});
+  }
+  // respawn the vehicle far away
+  it.x += (lane.speed>0?-1:1) * (COLS+lane.len)*T;
+  score += 25; ui.score.textContent = score;
+  shake = 8;
+}
+
+// ---------- Transform ----------
+function transform(){
+  powerTimer = POWER_MAX;
+  setForm('HE-MAN');
+  ui.power.style.width = '100%';
+  // burst of golden energy
+  for(let i=0;i<40;i++){
+    const a = Math.random()*Math.PI*2, sp = 80+Math.random()*260;
+    particles.push({x:player.x+T/2,y:player.y+T/2,
+      vx:Math.cos(a)*sp, vy:Math.sin(a)*sp, life:0.8,
+      col: Math.random()<0.5?'#ffcc33':'#fff7d0', sz:3+Math.random()*5});
+  }
+  flash = 1;
+  shake = 12;
+}
+function setForm(f){
+  ui.form.textContent = f;
+  ui.form.style.color = f==='HE-MAN' ? '#ff5fa2' : '#ffcc33';
+}
+
+// ---------- Outcomes ----------
+let shake = 0, flash = 0;
+function kill(msg){
+  if(player.dead) return;
+  player.dead = true;
+  lives--; ui.lives.textContent = lives;
+  for(let i=0;i<20;i++){
+    const a=Math.random()*Math.PI*2, sp=60+Math.random()*180;
+    particles.push({x:player.x+T/2,y:player.y+T/2,
+      vx:Math.cos(a)*sp,vy:Math.sin(a)*sp,life:0.7,col:'#ff5fa2',sz:3+Math.random()*4});
+  }
+  shake = 10;
+  if(lives<=0){
+    state='over';
+    showOverlay('GAME OVER', msg+'<br><br>Final score: <b style="color:#ffcc33">'+score+'</b>'+
+      (score>best?'<br>🏆 New best!':'')+'<br><br>The secrets of Grayskull remain safe... for now.','TRY AGAIN');
+    best=Math.max(best,score);
+  } else {
+    state='dead';
+    showOverlay('YOU PERISHED', msg+'<br><br><b>'+lives+'</b> '+(lives===1?'life':'lives')+' left.','CONTINUE');
+  }
+}
+
+function winLevel(){
+  score += 100 + Math.round(powerTimer*10);
+  ui.score.textContent = score;
+  // golden victory burst at castle
+  for(let i=0;i<60;i++){
+    const a=Math.random()*Math.PI*2, sp=60+Math.random()*300;
+    particles.push({x:player.x+T/2,y:player.y+T/2,
+      vx:Math.cos(a)*sp,vy:Math.sin(a)*sp,life:1,col:Math.random()<0.5?'#ffcc33':'#3ddc6b',sz:3+Math.random()*5});
+  }
+  level++; ui.level.textContent = level;
+  state='win';
+  showOverlay('GRAYSKULL REACHED!',
+    'Adam raises the Sword high atop Castle Grayskull!<br><br>Level '+(level-1)+' cleared. The roads of Eternia grow more dangerous...','ENTER LEVEL '+level);
+}
+
+// ---------- Overlay control ----------
+function showOverlay(title, html, btn){
+  ovTitle.textContent = title;
+  ovText.innerHTML = html;
+  el('startBtn').textContent = btn;
+  overlay.classList.remove('hidden');
+}
+function hideOverlay(){ overlay.classList.add('hidden'); }
+
+el('startBtn').addEventListener('click', handleStart);
+function handleStart(){
+  if(state==='menu'){ level=1;score=0;lives=3; resetHud(); buildLevel(); }
+  else if(state==='dead'){ // respawn same level
+    powerTimer=0; setForm('ADAM'); ui.power.style.width='0%';
+    player.col=COLS/2|0; player.row=START_ROW; player.dead=false; player.onLog=null;
+    player.hop=0; syncPlayerPixels(true);
+  }
+  else if(state==='over'){ level=1;score=0;lives=3; resetHud(); buildLevel(); }
+  else if(state==='win'){ powerTimer=0;setForm('ADAM');ui.power.style.width='0%'; buildLevel(); }
+  hideOverlay();
+  state='play';
+}
+function resetHud(){
+  ui.level.textContent=level; ui.score.textContent=score; ui.lives.textContent=lives;
+  setForm('ADAM'); ui.power.style.width='0%';
+}
+
+// ========================================================
+//  RENDER
+// ========================================================
+function render(){
+  ctx.save();
+  let sx=0,sy=0;
+  if(shake>0){ sx=(Math.random()-0.5)*shake; sy=(Math.random()-0.5)*shake; shake*=0.85; if(shake<0.3)shake=0; }
+  ctx.translate(sx,sy);
+
+  drawBackground();
+  if(state!=='menu'){
+    drawSwords();
+    drawLanes();
+    drawPlayer();
+  }
+  drawParticles();
+
+  ctx.restore();
+
+  // gold flash on transform
+  if(flash>0){
+    ctx.fillStyle='rgba(255,220,120,'+(flash*0.5)+')';
+    ctx.fillRect(0,0,W,H);
+    flash-=0.06; if(flash<0)flash=0;
+  }
+}
+
+function drawBackground(){
+  // grass start verge + median
+  ctx.fillStyle='#10331a'; ctx.fillRect(0,0,W,H);
+
+  // river band
+  ctx.fillStyle='#1f6fb0';
+  ctx.fillRect(0,tileY(RIVER_ROWS[0]),W,RIVER_ROWS.length*T);
+  // water ripples
+  ctx.strokeStyle='rgba(255,255,255,.08)';
+  for(let r of RIVER_ROWS){
+    for(let x=0;x<W;x+=26){
+      ctx.beginPath();
+      ctx.arc(x+(r*9)%26, tileY(r)+T/2+Math.sin((x+r*30)/30)*4, 6, 0.2, Math.PI-0.2);
+      ctx.stroke();
+    }
+  }
+
+  // road band
+  ctx.fillStyle='#2b2b33';
+  ctx.fillRect(0,tileY(ROAD_ROWS[0]),W,ROAD_ROWS.length*T);
+  // lane dashes
+  ctx.strokeStyle='rgba(255,255,255,.25)'; ctx.lineWidth=2; ctx.setLineDash([14,16]);
+  for(let i=1;i<ROAD_ROWS.length;i++){
+    const y=tileY(ROAD_ROWS[0]+i);
+    ctx.beginPath();ctx.moveTo(0,y);ctx.lineTo(W,y);ctx.stroke();
+  }
+  ctx.setLineDash([]);
+
+  // median + start grass texture
+  grass(MEDIAN_ROW); grass(START_ROW); grass(START_ROW+1); grass(START_ROW+2);
+
+  // goal zone with castle
+  drawCastle();
+}
+function grass(row){
+  ctx.fillStyle='#1c6b32'; ctx.fillRect(0,tileY(row),W,T);
+  ctx.fillStyle='rgba(0,0,0,.12)';
+  for(let x=0;x<W;x+=12) ctx.fillRect(x+(row%2?6:0), tileY(row)+T-6, 3, 6-(x%2)*2);
+}
+
+function drawCastle(){
+  const y=tileY(GOAL_ROW);
+  // sky strip behind castle
+  const g=ctx.createLinearGradient(0,y,0,y+T);
+  g.addColorStop(0,'#3a2e74'); g.addColorStop(1,'#1c1640');
+  ctx.fillStyle=g; ctx.fillRect(0,y,W,T);
+
+  // Castle Grayskull — the green skull-faced fortress
+  const cx=W/2, base=y+T;
+  ctx.fillStyle='#6f7d52';
+  // two towers
+  for(const tx of [cx-90,cx+50]){
+    ctx.fillRect(tx,y+4,40,T-4);
+    // battlements
+    for(let i=0;i<3;i++) ctx.fillRect(tx+i*15, y, 10, 8);
+  }
+  // central skull keep
+  ctx.fillStyle='#8a986a';
+  ctx.fillRect(cx-34,y+2,68,T-2);
+  // skull face
+  ctx.fillStyle='#11210f';
+  ctx.beginPath(); ctx.arc(cx-13,y+15,7,0,7); ctx.arc(cx+13,y+15,7,0,7); ctx.fill(); // eyes
+  ctx.beginPath(); ctx.moveTo(cx-6,y+24); ctx.lineTo(cx+6,y+24); ctx.lineTo(cx,y+32); ctx.fill(); // nose
+  // glowing eyes when reachable
+  ctx.fillStyle='rgba(255,204,51,.9)';
+  ctx.beginPath(); ctx.arc(cx-13,y+15,3,0,7); ctx.arc(cx+13,y+15,3,0,7); ctx.fill();
+  // banner
+  ctx.fillStyle='#ffcc33'; ctx.font='bold 9px Trebuchet MS'; ctx.textAlign='center';
+  ctx.fillText('GRAYSKULL', cx, y+T-3);
+  ctx.textAlign='left';
+}
+
+function drawLanes(){
+  for(const lane of lanes){
+    const y=tileY(lane.row);
+    for(const it of lane.items){
+      if(lane.type==='log') drawRaft(it.x,y,it.len,lane.speed);
+      else drawCar(it.x,y,it.len,lane.color,lane.speed);
+    }
+  }
+}
+
+function drawRaft(x,y,len,speed){
+  const w=len*T, h=T-8, yy=y+4;
+  // wooden raft
+  ctx.fillStyle='#6b4a2b'; ctx.fillRect(x,yy,w,h);
+  ctx.fillStyle='#4d351e';
+  for(let i=0;i<len;i++) ctx.fillRect(x+i*T+2,yy,3,h);
+  ctx.strokeStyle='#3a2614'; ctx.lineWidth=2; ctx.strokeRect(x,yy,w,h);
+  // rope binding
+  ctx.fillStyle='#caa46a'; ctx.fillRect(x+w/2-2,yy,4,h);
+}
+
+function drawCar(x,y,len,color,speed){
+  const w=len*T-10, h=T-12, yy=y+6, xx=x+5;
+  const dir = speed>0?1:-1;
+  // body
+  ctx.fillStyle=color;
+  roundRect(xx,yy,w,h,6); ctx.fill();
+  // cabin
+  ctx.fillStyle='rgba(255,255,255,.35)';
+  roundRect(xx+w*0.25, yy+3, w*0.5, h*0.45, 4); ctx.fill();
+  // wheels
+  ctx.fillStyle='#111';
+  ctx.fillRect(xx+6,yy+h-3,10,5); ctx.fillRect(xx+w-16,yy+h-3,10,5);
+  // headlight in travel direction
+  ctx.fillStyle='#fff6b0';
+  if(dir>0) ctx.fillRect(xx+w-4,yy+h*0.4,4,6);
+  else ctx.fillRect(xx,yy+h*0.4,4,6);
+}
+
+function drawSwords(){
+  for(const sw of swords){
+    const x=tileX(sw.col)+T/2, y=tileY(sw.row)+T/2 + Math.sin(sw.t*4)*4;
+    const glow = 10+Math.sin(sw.t*6)*4;
+    ctx.save();
+    ctx.shadowColor='#ffe680'; ctx.shadowBlur=glow;
+    // blade
+    ctx.fillStyle='#e8eef5'; ctx.fillRect(x-2,y-14,4,18);
+    ctx.fillStyle='#ffffff'; ctx.fillRect(x-1,y-14,1,18);
+    // guard
+    ctx.fillStyle='#ffcc33'; ctx.fillRect(x-7,y+4,14,3);
+    // hilt
+    ctx.fillStyle='#b97b2a'; ctx.fillRect(x-1.5,y+7,3,6);
+    ctx.restore();
+    // sparkle ring
+    ctx.strokeStyle='rgba(255,230,128,.5)'; ctx.lineWidth=1;
+    ctx.beginPath(); ctx.arc(x,y,glow+6,0,7); ctx.stroke();
+  }
+}
+
+// ---------- Character art ----------
+function drawPlayer(){
+  const x=player.x+T/2, baseY=player.y+T;
+  const hopLift = Math.sin((1-player.hop)*Math.PI)*10; // arc during hop
+  const y=baseY-hopLift;
+  const f=player.face;
+  const heman = powerTimer>0;
+
+  ctx.save();
+  ctx.translate(x,y);
+  ctx.scale(f,1);
+
+  // shadow
+  ctx.fillStyle='rgba(0,0,0,.3)';
+  ctx.beginPath(); ctx.ellipse(0,hopLift+1,11,4,0,0,7); ctx.fill();
+
+  if(heman){
+    // aura
+    ctx.shadowColor='#ffcc33'; ctx.shadowBlur=14;
+    drawHeMan();
+    ctx.shadowBlur=0;
+  } else {
+    drawAdam();
+  }
+  ctx.restore();
+}
+
+// Prince Adam — slim, lavender vest, pink, timid
+function drawAdam(){
+  const skin='#f3c8a0', hair='#f4d34a', vest='#d9b3ff', pants='#fff';
+  // legs
+  ctx.fillStyle=pants;
+  ctx.fillRect(-7,-12,5,12); ctx.fillRect(2,-12,5,12);
+  ctx.fillStyle='#9a6b3c'; ctx.fillRect(-7,-2,5,3); ctx.fillRect(2,-2,5,3);
+  // torso (vest)
+  ctx.fillStyle=vest; roundRect(-8,-26,16,15,3); ctx.fill();
+  ctx.fillStyle='#b98cf0'; ctx.fillRect(-8,-26,16,3);
+  // arms
+  ctx.fillStyle=skin; ctx.fillRect(-11,-25,4,11); ctx.fillRect(7,-25,4,11);
+  // head
+  ctx.fillStyle=skin; roundRect(-7,-39,14,14,5); ctx.fill();
+  // hair (page-boy blond)
+  ctx.fillStyle=hair;
+  roundRect(-8,-41,16,8,4); ctx.fill();
+  ctx.fillRect(-8,-37,3,8); ctx.fillRect(5,-37,3,8);
+  // eyes
+  ctx.fillStyle='#222'; ctx.fillRect(1,-33,2,3); ctx.fillRect(-3,-33,2,3);
+}
+
+// He-Man — bulky, bare chest, harness, sword raised
+function drawHeMan(){
+  const skin='#e3a86b', hair='#caa24a', boots='#7a4a1f', fur='#caa46a';
+  // legs (bigger)
+  ctx.fillStyle=skin;
+  ctx.fillRect(-8,-14,6,14); ctx.fillRect(2,-14,6,14);
+  ctx.fillStyle=boots; ctx.fillRect(-8,-4,6,4); ctx.fillRect(2,-4,6,4);
+  // fur trunks
+  ctx.fillStyle=fur; ctx.fillRect(-9,-18,18,6);
+  // torso (broad bare chest)
+  ctx.fillStyle=skin; roundRect(-11,-32,22,16,4); ctx.fill();
+  // chest harness (X cross)
+  ctx.strokeStyle='#7a4a1f'; ctx.lineWidth=3;
+  ctx.beginPath(); ctx.moveTo(-10,-31); ctx.lineTo(10,-18); ctx.moveTo(10,-31); ctx.lineTo(-10,-18); ctx.stroke();
+  ctx.fillStyle='#ffcc33'; ctx.beginPath(); ctx.arc(0,-24,3,0,7); ctx.fill(); // iron cross emblem
+  // arms (muscular) — one raised holding sword
+  ctx.fillStyle=skin;
+  ctx.fillRect(-15,-31,5,13);          // left arm down
+  // raised right arm
+  ctx.save(); ctx.translate(11,-30); ctx.rotate(-0.5);
+  ctx.fillRect(0,-12,5,16);
+  // SWORD raised
+  ctx.fillStyle='#eef3f8'; ctx.fillRect(1.5,-30,3,20);
+  ctx.fillStyle='#fff'; ctx.fillRect(2.3,-30,1,20);
+  ctx.fillStyle='#ffcc33'; ctx.fillRect(-2,-12,10,3);
+  ctx.restore();
+  // head
+  ctx.fillStyle=skin; roundRect(-7,-44,14,14,5); ctx.fill();
+  // hair (brown bowl)
+  ctx.fillStyle=hair; roundRect(-8,-46,16,8,4); ctx.fill();
+  ctx.fillRect(-8,-42,3,6); ctx.fillRect(5,-42,3,6);
+  // stern eyes
+  ctx.fillStyle='#1a1a1a'; ctx.fillRect(1,-38,2,3); ctx.fillRect(-3,-38,2,3);
+  // jaw line
+  ctx.strokeStyle='rgba(0,0,0,.2)'; ctx.lineWidth=1;
+  ctx.beginPath(); ctx.moveTo(-6,-31);ctx.lineTo(6,-31);ctx.stroke();
+}
+
+function drawParticles(){
+  for(const p of particles){
+    ctx.globalAlpha=Math.max(0,p.life);
+    ctx.fillStyle=p.col;
+    ctx.fillRect(p.x-p.sz/2,p.y-p.sz/2,p.sz,p.sz);
+  }
+  ctx.globalAlpha=1;
+}
+
+function updateParticles(dt){
+  for(const p of particles){
+    p.x+=p.vx*dt; p.y+=p.vy*dt; p.vy+=600*dt; p.life-=dt*1.4;
+  }
+  particles = particles.filter(p=>p.life>0);
+}
+
+// drive particles even when paused for a nice menu? keep simple: integrate in loop
+let last2=0;
+function physTick(ts){
+  const dt=Math.min(0.05,(ts-last2)/1000)||0; last2=ts;
+  updateParticles(dt);
+  requestAnimationFrame(physTick);
+}
+
+function roundRect(x,y,w,h,r){
+  ctx.beginPath();
+  ctx.moveTo(x+r,y);
+  ctx.arcTo(x+w,y,x+w,y+h,r);
+  ctx.arcTo(x+w,y+h,x,y+h,r);
+  ctx.arcTo(x,y+h,x,y,r);
+  ctx.arcTo(x,y,x+w,y,r);
+  ctx.closePath();
+}
+
+// ---------- boot ----------
+requestAnimationFrame(loop);
+requestAnimationFrame(physTick);
+</script>
+</body>
+</html>
