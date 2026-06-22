@@ -56,10 +56,14 @@
   .hidden{display:none!important}
   .keys{font-size:12px;color:#9a93d6}
   .keys kbd{background:#2a2658;border:1px solid #463f8f;border-radius:4px;padding:1px 6px;margin:0 1px}
-  #touch{display:none;gap:8px;margin-top:4px}
-  #touch button{padding:14px 18px;font-size:18px;box-shadow:0 3px 0 #b96b00;
+  #swipehint{display:none;font-size:12px;color:#9a93d6;margin-top:6px;text-align:center}
+  #touch{display:none;gap:14px;margin-top:6px}
+  #touch button{padding:16px 22px;font-size:20px;box-shadow:0 3px 0 #b96b00;
     touch-action:manipulation; user-select:none; -webkit-user-select:none; -webkit-tap-highlight-color:transparent}
-  @media (hover:none),(pointer:coarse){#touch{display:grid;grid-template-columns:repeat(3,60px);grid-template-rows:repeat(2,60px);justify-content:center;gap:8px}}
+  @media (hover:none),(pointer:coarse){
+    #touch{display:grid;grid-template-columns:repeat(3,64px);grid-template-rows:repeat(2,64px);justify-content:center;gap:14px}
+    #swipehint{display:block}
+  }
   #touch .sp{visibility:hidden}
 
   /* phones / narrow screens */
@@ -100,6 +104,7 @@
     </div>
   </div>
 
+  <div id="swipehint">👆 Swipe the board to move — or use the pad</div>
   <div id="touch">
     <span class="sp"></span><button data-d="up">▲</button><span class="sp"></span>
     <button data-d="left">◀</button><button data-d="down">▼</button><button data-d="right">▶</button>
@@ -275,6 +280,25 @@ document.querySelectorAll('#touch button').forEach(b=>{
                    if(state==='play') move(b.dataset.d); };
   b.addEventListener('pointerdown', act);
 });
+
+// ---- Swipe-to-move: flick a finger across the board to hop ----
+let swX=0, swY=0, swOn=false;
+const SWIPE = 26;  // px before a hop fires
+cv.addEventListener('touchstart', e=>{
+  const t=e.changedTouches[0]; swX=t.clientX; swY=t.clientY; swOn=true;
+  initAudio(); resumeAudio();
+}, {passive:true});
+cv.addEventListener('touchmove', e=>{
+  if(!swOn || state!=='play') return;
+  const t=e.changedTouches[0];
+  const dx=t.clientX-swX, dy=t.clientY-swY;
+  if(Math.abs(dx)<SWIPE && Math.abs(dy)<SWIPE) return;
+  if(Math.abs(dx)>Math.abs(dy)) move(dx>0?'right':'left');
+  else move(dy>0?'down':'up');
+  swX=t.clientX; swY=t.clientY;   // reset origin so a long drag hops again
+  e.preventDefault();
+}, {passive:false});
+cv.addEventListener('touchend', ()=>{ swOn=false; }, {passive:true});
 
 function move(dir){
   if(player.hop>0 || player.dead) return;
